@@ -1,0 +1,6 @@
+termcolor
+numpy
+keras
+keras-gpu
+tensorflow-gpu
+coloredlogs
