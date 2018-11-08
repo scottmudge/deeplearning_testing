@@ -19,6 +19,7 @@ import os
 img_rows = 28
 img_cols = 28
 
+filenames = []
 
 def load_test_pngs(folder: str) -> list:
     if not os.path.exists(folder):
@@ -26,17 +27,27 @@ def load_test_pngs(folder: str) -> list:
 
     return_arr = np.ndarray((28, 28, 0))
     x = 0
+
+    cv.startWindowThread()
+
     for image_path in glob.glob(folder + "/*.png"):
         logging("Files").info("File {}: {}".format(x, image_path))
-        image = misc.imread(image_path, flatten=True)
+        filenames.append(image_path)
+        image = misc.imread(image_path, flatten=False)
+        image = cv.cvtColor(image, cv.COLOR_BGR2GRAY)
+        image = image.astype('float32')
+        image /= 255.0
+        image = 1.0 - image
         return_arr = np.dstack((return_arr, image))
         x+=1
     return_arr = return_arr.swapaxes(0, 2)
+    return_arr = return_arr.swapaxes(1, 2)
     return_arr = return_arr.reshape(return_arr.shape[0], 28, 28, 1)
+    for x in range(0, 10):
+        cv.imshow("Test", return_arr[x])
+        cv.waitKey()
     logging("TEST").info("Image Shape: {}".format(return_arr.shape))
-    return_arr = return_arr.astype('float32')
-    return_arr /= 255.0
-    return return_arr
+    return return_arr.astype('float32')
 
 
 if __name__ == '__main__':
@@ -132,19 +143,31 @@ if __name__ == '__main__':
     model.summary()
 
     logging("Main").info("Done Loading!")
-    inp = input("Press [1] For Training, or [2] For Testing")
+    inp = input("Press:\n\n"
+                "-> [1] For Training\n"
+                "-> [2] For Evaluation\n"
+                "-> [3] For Testing\n")
 
     if inp == '1':
         logging("Model").info("Fitting model to data...")
-        model.fit(x_train, y_train, batch_size=32, nb_epoch=10, verbose=1)
+        model.fit(x_train, y_train, batch_size=32, nb_epoch=10, verbose=0)
         score = model.evaluate(x_test, y_test, verbose=0)
         logging("Score").info("Final score: \n\t> Loss: {}\n\t> Accuracy: {}".format(score[0], score[1]))
 
         logging("Model").info("Saving model...")
         model.save(model_fn, True, True)
     elif inp == '2':
+        logging("Model").info("Evaluating model against test data...")
+        scores = model.evaluate(x_test, y_test, verbose=0)
+        logging("Results").info("Model Accuracy: {}%".format(scores[1] * 100.0))
+    elif inp == '3':
         logging("Data").info("Loading test data...")
         datas = load_test_pngs("{}/test_data/handwr_nums/".format(utility.get_root_directory()))
-        results = model.predict(datas)
-        logging("RESULTS").info("Results:\n\n{}".format(str(results)))
+        results = model.predict(datas, steps=1)
+
+        for x in range(0, 10):
+            index = np.argmax(results[x])
+            logging("Results").info("Result [{}]:\n\t> Filename: {} \n\t> Prediction: {} \n\t> Value: {}".format(
+                x, filenames[x], index, results[x][index]
+            ))
 
