@@ -2,5 +2,10 @@ termcolor
 numpy
 keras
 keras-gpu
+scipy
+tensorflow
 tensorflow-gpu
+py-opencv
+opencv
+libopencv
 coloredlogs

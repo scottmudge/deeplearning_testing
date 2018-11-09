@@ -1,25 +1,38 @@
+# Keras Imports
 import keras
 from keras.models import Sequential
-from keras.layers import Dense, Dropout, Activation, Flatten, Conv2D, MaxPooling2D
-from keras.utils import np_utils
+from keras.layers import Dense, Dropout, Activation, Flatten, Conv2D, MaxPooling2D, BatchNormalization
+from keras.utils import np_utils, multi_gpu_model
 from keras.datasets import mnist
+from keras.callbacks import ReduceLROnPlateau
 from keras import backend as K
-import cv2 as cv
-import tensorflow as tf
-import numpy as np
 from keras.backend.tensorflow_backend import set_session
+from keras.preprocessing.image import ImageDataGenerator
+
+# Other Science Imports
+import tensorflow as tf
+from sklearn.metrics import confusion_matrix
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+
+# Image Processing Imports
+from scipy import misc
+import cv2 as cv
+
+# Misc Imports
+import os
+import glob
 import utils.logger
 import utils.utility as utility
+from utils.settings import Config
 from utils.logger import get_logger as logging
-from scipy import misc
-import glob
-import os
-
 
 img_rows = 28
 img_cols = 28
 
 filenames = []
+
 
 def load_test_pngs(folder: str) -> list:
     if not os.path.exists(folder):
@@ -58,13 +71,21 @@ if __name__ == '__main__':
     np.random.seed(123)
 
     # -----------------------------
+    # Add Config
+    # -----------------------------
+    config = Config("keras_test1", utils.utility.get_root_directory())
+    c_batch_size = config.add_param("BatchSize", 64)
+    c_num_classes = config.add_param("NumClasses", 10)
+    c_epochs = config.add_param("Epochs", 2)
+    config.save()
+
+    # -----------------------------
     # Initialize TensorFlow Session
     # -----------------------------
-    config = tf.ConfigProto()
-    config.gpu_options.allow_growth = True
-    config.log_device_placement = True
-
-    sess = tf.Session(config=config)
+    tf_config = tf.ConfigProto()
+    tf_config.gpu_options.allow_growth = True
+    # tf_config.log_device_placement = True
+    sess = tf.Session(config=tf_config)
     set_session(sess)
 
     # -----------------------------
@@ -109,35 +130,54 @@ if __name__ == '__main__':
     # -----------------------------
 
     logging("Model").info("Creating model...")
-    model = Sequential()
+    keep_going = True
 
-    # 32 x 3 x 3 Conv layer with:
-    #   > relu activation
-    #   > input shape of 1 channel by 28 x 28 pixels
-    model.add(Conv2D(32, kernel_size=(3, 3), activation='relu', input_shape=input_shape))
+    model = None
 
-    # Second Conv Layer
-    model.add(Conv2D(32, kernel_size=(3, 3), activation='relu'))
-    # Max pooling layer
-    model.add(MaxPooling2D(pool_size=(2, 2)))
-    # Dropout to prevent over-fitting
-    model.add(Dropout(0.25))
+    while keep_going:
+        keep_going = False
+        model = Sequential()
 
-    model.add(Flatten())
-    model.add(Dense(128, activation='relu'))
-    model.add(Dropout(0.5))
-    model.add(Dense(10, activation='softmax'))
+        # 32 x 3 x 3 Conv layer with:
+        #   > relu activation
+        #   > input shape of 1 channel by 28 x 28 pixels
+        model.add(Conv2D(32, kernel_size=(3, 3), activation='relu', input_shape=input_shape, kernel_initializer='he_normal'))
 
-    model.compile(loss='categorical_crossentropy',
-                  optimizer='adam',
-                  metrics=['accuracy'])
+        # Second Conv Layer
+        model.add(Conv2D(32, kernel_size=(3, 3), activation='relu', kernel_initializer='he_normal'))
+        # Max pooling layer
+        model.add(MaxPooling2D(pool_size=(2, 2)))
+        # Dropout to prevent over-fitting
+        model.add(Dropout(0.20))
 
-    logging("Model").info("Model shape: {}".format(model.output_shape))
+        model.add(Conv2D(64, (3, 3), activation='relu', padding='same', kernel_initializer='he_normal'))
+        model.add(Conv2D(64, (3, 3), activation='relu', padding='same', kernel_initializer='he_normal'))
 
-    # Test if model weights already exists
-    if utility.file_exists(model_fn):
-        logging("Model").info("Loading model weights from disk:\n\t> Filename: {}".format(model_fn))
-        model.load_weights(model_fn)
+        model.add(MaxPooling2D(pool_size=(2, 2)))
+        model.add(Dropout(0.25))
+        model.add(Conv2D(127, (3, 3), activation='relu', padding='same', kernel_initializer='he_normal'))
+        model.add(Dropout(0.25))
+
+        model.add(Flatten())
+        model.add(Dense(128, activation='relu'))
+        model.add(BatchNormalization())
+        model.add(Dropout(0.25))
+        model.add(Dense(10, activation='softmax'))
+
+        model.compile(loss='categorical_crossentropy',
+                      optimizer=keras.optimizers.RMSprop(),
+                      metrics=['accuracy'])
+
+        # Test if model weights already exists
+        if utility.file_exists(model_fn):
+            logging("Model").info("Loading model weights from disk:\n\t> Filename: {}".format(model_fn))
+            try:
+                model.load_weights(model_fn)
+            except ValueError:
+                os.remove(model_fn)
+                keep_going = True
+                continue
+        break
 
     logging("Model").info("Model Summary: \n")
     model.summary()
@@ -146,11 +186,38 @@ if __name__ == '__main__':
     inp = input("Press:\n\n"
                 "-> [1] For Training\n"
                 "-> [2] For Evaluation\n"
-                "-> [3] For Testing\n")
+                "-> [3] For Testing\n"
+                "-> [0] Quit\n\n\t\t: "
+                )
 
     if inp == '1':
+
+        learning_rate_reduction = ReduceLROnPlateau(monitor='val_acc',
+                                                    patience=3,
+                                                    verbose=1,
+                                                    factor=0.5,
+                                                    min_lr=0.0001)
+
+        datagen = ImageDataGenerator(
+            featurewise_center=False,
+            samplewise_center=False,
+            featurewise_std_normalization=False,
+            samplewise_std_normalization=False,
+            zca_whitening=False,
+            rotation_range=40,
+            zoom_range=0.1,
+            width_shift_range=0.1,
+            height_shift_range=0.1,
+            horizontal_flip=False,
+            vertical_flip=False)
+
         logging("Model").info("Fitting model to data...")
-        model.fit(x_train, y_train, batch_size=32, nb_epoch=10, verbose=0)
+
+        datagen.fit(x_train)
+        h = model.fit_generator(datagen.flow(x_train, y_train, batch_size=c_batch_size.value),
+                                epochs=c_epochs.value, validation_data=(x_test, y_test),
+                                verbose=1, steps_per_epoch=x_train.shape[0],
+                                callbacks=[learning_rate_reduction],)
         score = model.evaluate(x_test, y_test, verbose=0)
         logging("Score").info("Final score: \n\t> Loss: {}\n\t> Accuracy: {}".format(score[0], score[1]))
 
@@ -170,4 +237,6 @@ if __name__ == '__main__':
             logging("Results").info("Result [{}]:\n\t> Filename: {} \n\t> Prediction: {} \n\t> Value: {}".format(
                 x, filenames[x], index, results[x][index]
             ))
+    elif inp == '0':
+        pass
 
